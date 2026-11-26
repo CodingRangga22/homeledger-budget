@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<!--
+  HomeLedger — Household Budget
+  Features: monthly income and expense tracking, category breakdown with a donut
+  chart, per-category budget limits, a six-month trend chart, safe-to-spend-per-day
+  guidance, search and filters, JSON and CSV export/import, dark and light themes.
+  Technical choices: a static site with no build step and zero dependencies. All
+  logic is vanilla JavaScript split into small modules by job, all data stays in
+  the browser in localStorage, and the site works fully offline from its own files.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeLedger — Household Budget</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Cpath d='M9 23V13l7-5 7 5v10h-5v-6H14v6z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="30" height="30"><rect width="32" height="32" rx="7" fill="#0f766e"/><path d="M9 23V13l7-5 7 5v10h-5v-6H14v6z" fill="#ffffff"/></svg>
+      </span>
+      <div>
+        <h1 class="brand-name">HomeLedger</h1>
+        <p class="brand-tag">Household budget, kept simple</p>
+      </div>
+    </div>
+    <nav class="header-actions" aria-label="Site tools">
+      <label class="currency-picker">
+        <span class="visually-hidden">Currency</span>
+        <select id="currencySelect" aria-label="Currency"></select>
+      </label>
+      <button type="button" id="themeToggle" class="icon-button" aria-label="Toggle dark mode"></button>
+      <button type="button" id="addTransactionTop" class="primary-button">+ Add transaction</button>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <div id="demoBanner" class="demo-banner" hidden>
+    <p>Demo data loaded so you can explore right away. Your own entries are saved in this browser.</p>
+    <div class="demo-banner-actions">
+      <button type="button" id="clearDemoButton" class="ghost-button">Clear demo data</button>
+      <button type="button" id="dismissDemoButton" class="ghost-button" aria-label="Dismiss demo banner">Dismiss</button>
+    </div>
+  </div>
+
+  <section class="month-bar card" aria-label="Month navigation">
+    <button type="button" id="previousMonth" class="icon-button" aria-label="Previous month">&#8249;</button>
+    <div class="month-label">
+      <h2 id="monthTitle">Month</h2>
+      <p id="monthSubtitle" class="muted"></p>
+    </div>
+    <button type="button" id="nextMonth" class="icon-button" aria-label="Next month">&#8250;</button>
+    <button type="button" id="todayButton" class="ghost-button">Today</button>
+  </section>
+
+  <section class="summary-grid" aria-label="Monthly summary">
+    <article class="card summary-card">
+      <p class="summary-label">Total income</p>
+      <p class="summary-value income" id="totalIncome">$0</p>
+      <p class="summary-delta muted" id="incomeDelta"></p>
+    </article>
+    <article class="card summary-card">
+      <p class="summary-label">Total expenses</p>
+      <p class="summary-value expense" id="totalExpenses">$0</p>
+      <p class="summary-delta muted" id="expensesDelta"></p>
+    </article>
+    <article class="card summary-card">
+      <p class="summary-label">Balance</p>
+      <p class="summary-value" id="balanceValue">$0</p>
+      <p class="summary-delta muted" id="balanceDelta"></p>
+    </article>
+    <article class="card summary-card">
+      <p class="summary-label">Savings rate</p>
+      <p class="summary-value" id="savingsRate">0%</p>
+      <p class="summary-delta muted" id="savingsDelta"></p>
+    </article>
+    <article class="card summary-card highlight">
+      <p class="summary-label">Safe to spend per day
+        <span class="info-tip" tabindex="0" role="note" aria-label="How safe to spend is calculated" title="Safe to spend per day = (this month's balance so far, minus the budget money still set aside for the rest of the month) divided by the days left in the month, today included.">?</span>
+      </p>
+      <p class="summary-value" id="safeToSpend">n/a</p>
+      <p class="summary-delta muted" id="safeToSpendNote"></p>
+    </article>
+  </section>
+
+  <div class="content-grid">
+    <div class="column-main">
+      <section class="card" aria-labelledby="breakdownHeading">
+        <div class="card-heading">
+          <h2 id="breakdownHeading">Where the money went</h2>
+          <p class="muted small">Expenses by category. Select a category to filter the list.</p>
+        </div>
+        <div class="breakdown-layout">
+          <div id="donutChart" class="donut-wrap" role="img" aria-label="Donut chart of expenses by category"></div>
+          <ul id="categoryList" class="category-list"></ul>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="budgetHeading">
+        <div class="card-heading">
+          <h2 id="budgetHeading">Budgets</h2>
+          <p class="muted small">Monthly limits per category. Bars turn amber when close and red when over.</p>
+        </div>
+        <div id="budgetList" class="budget-list"></div>
+        <form id="budgetForm" class="budget-form">
+          <label>Category
+            <select id="budgetCategory" required></select>
+          </label>
+          <label>Monthly limit
+            <input id="budgetLimit" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" required>
+          </label>
+          <button type="submit" class="ghost-button">Set budget</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="trendHeading">
+        <div class="card-heading">
+          <h2 id="trendHeading">Last 6 months</h2>
+          <p class="muted small">Income and expenses side by side, oldest to newest.</p>
+        </div>
+        <div id="trendChart" role="img" aria-label="Bar chart of income and expenses for the last six months"></div>
+        <div class="legend"><span class="legend-dot income-dot"></span>Income<span class="legend-dot expense-dot"></span>Expenses</div>
+      </section>
+    </div>
+
+    <section class="card transactions-card" aria-labelledby="transactionsHeading">
+      <div class="card-heading">
+        <h2 id="transactionsHeading">Transactions</h2>
+        <p class="muted small" id="transactionCount"></p>
+      </div>
+      <div class="filters">
+        <label class="search-box">
+          <span class="visually-hidden">Search transactions</span>
+          <input id="searchInput" type="search" placeholder="Search notes or categories">
+        </label>
+        <label>
+          <span class="visually-hidden">Filter by type</span>
+          <select id="typeFilter">
+            <option value="all">All types</option>
+            <option value="income">Income</option>
+            <option value="expense">Expenses</option>
+          </select>
+        </label>
+        <button type="button" id="clearFilterButton" class="ghost-button" hidden>Clear category filter</button>
+      </div>
+      <div id="activeFilterNote" class="active-filter" hidden></div>
+      <div id="transactionList" class="transaction-list"></div>
+      <div class="data-tools">
+        <h3>Data tools</h3>
+        <div class="tool-row">
+          <button type="button" id="exportJsonButton" class="ghost-button">Export JSON</button>
+          <button type="button" id="exportCsvButton" class="ghost-button">Export CSV</button>
+          <label class="ghost-button file-label">Import JSON
+            <input id="importFileInput" type="file" accept="application/json,.json" hidden>
+          </label>
+          <button type="button" id="resetButton" class="ghost-button danger">Reset all data</button>
+        </div>
+        <p class="muted small">Everything is stored only in this browser. Export a backup before switching devices.</p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <p>HomeLedger keeps your household budget on your own device. No account, no network, no tracking.</p>
+</footer>
+
+<button type="button" id="addTransactionFab" class="fab" aria-label="Add transaction">+</button>
+
+<div id="formOverlay" class="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="formTitle">
+    <div class="sheet-heading">
+      <h2 id="formTitle">Add transaction</h2>
+      <button type="button" id="closeFormButton" class="icon-button" aria-label="Close form">&#215;</button>
+    </div>
+    <form id="transactionForm" novalidate>
+      <div class="segmented" role="group" aria-label="Transaction type">
+        <button type="button" id="typeExpenseButton" class="segment active">Expense</button>
+        <button type="button" id="typeIncomeButton" class="segment">Income</button>
+      </div>
+      <label>Amount
+        <input id="amountInput" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" required>
+      </label>
+      <label>Category
+        <select id="categoryInput" required></select>
+      </label>
+      <label>Date
+        <input id="dateInput" type="date" required>
+      </label>
+      <label>Note <span class="muted">(optional)</span>
+        <input id="noteInput" type="text" maxlength="120" placeholder="e.g. Weekly groceries">
+      </label>
+      <p id="formError" class="form-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" id="cancelFormButton" class="ghost-button">Cancel</button>
+        <button type="submit" class="primary-button" id="saveTransactionButton">Save transaction</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" hidden>
+  <span id="toastText"></span>
+  <button type="button" id="toastUndoButton" class="toast-action" hidden>Undo</button>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
