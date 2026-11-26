@@ -1,55 +1,37 @@
-# HomeLedger — Dossier
+# HomeLedger — dossier
 
-## The problem
+**Problem.** A household needs to answer four questions at a glance: how
+much came in, how much went out, what is left, and what is still due —
+without an account, a bank connection, or a spreadsheet.
 
-Households track money in scattered notes and banking apps that show what
-already happened, but never answer the one question that matters day to
-day: *how much can we safely spend today?* HomeLedger is built around that
-answer.
+**The site.** HomeLedger opens on November 2026 with the whole month on one
+screen: five summary cards, a category donut, the five latest transactions,
+a six-month income-vs-expenses trend, bills due soon and savings goals.
+Five linked pages (Overview, Ledger, Budgets, Bills, Planner) cover the
+full job: a searchable ledger of 42 November transactions (252 across six
+months) that can be added, edited and deleted with undo; four envelopes
+over ten budget categories with money moves between them; four bills and
+subscriptions with due dates and paid states; two savings goals and a
+monthly rollover that carries last month's balance forward.
 
-## What it is
+**Standout feature — Safe to spend per day.**
+`(balance so far − Σ max(0, category limit − spent)) ÷ days left including today`.
+It answers "what can I spend today without breaking the plan?" instead of
+just reporting the past. Negative results are labelled "Over plan", it is
+only shown for the current month, and it can never divide by zero.
 
-A complete household budget site that runs entirely in the browser from
-static files: monthly income and expense tracking with categories,
-a per-category breakdown with a hand-built SVG donut, budget limits with
-progress bars that turn amber near the limit and red over it, a six-month
-income-versus-expenses trend, date-grouped transactions with search and
-filters, JSON/CSV export and import, multiple currencies, and light/dark
-themes. First run seeds six months of realistic demo data, generated
-relative to the day the site is opened, so every figure is alive at once.
+**Technical choices.** Static files under `app/`, split by job
+(`data.js`, `state.js`, `charts.js`, `views.js`, `main.js`), zero
+dependencies, no build step, no network requests: the first load is seven
+small files. State lives in one versioned localStorage key
+(`homeledger:v1`) behind try/catch with an in-memory fallback. Charts and
+icons are hand-built inline SVG; the font is a system stack. Demo data is
+seeded with a deterministic generator relative to the day the site is
+first opened — never future-dated, with a 20% savings rate, no category
+above 30% of spending, Groceries at about 85% of its budget (amber) and
+Dining slightly over (red) on any day of the month.
 
-## The standout feature: Safe to spend per day
-
-> Safe to spend per day = (current month's balance so far − total unused
-> budget still set aside) ÷ days left in the month, today included.
-
-The balance is the current month only, never a cumulative all-time
-figure; unused budget per category is max(0, limit − spent), and
-categories without a limit are ignored. It is shown only for the current
-month (other months read "n/a"), never divides by zero, and a negative
-result is presented as "Over plan" with an explanation instead of a raw
-negative number. A tooltip on the card states the formula in plain words.
-
-## Technical decisions
-
-- **Offline-first, zero dependencies, no build step.** Vanilla HTML, CSS
-  and JavaScript modules under `app/`, each file with one clear job, so
-  the first load is a handful of small files and the site works from
-  `file://` or any static host.
-- **Privacy by architecture.** Data lives in a single versioned
-  localStorage key with an in-memory fallback; nothing is ever sent
-  anywhere.
-- **Deterministic demo data.** A seeded PRNG plus amounts scaled to the
-  days elapsed in the month keeps the demo honest on any date: savings
-  rate 15–25%, no category above 40% of spending, one budget near 85%,
-  one slightly over.
-- **Icons are hand-drawn inline SVG**, never emoji, so nothing renders as
-  an empty box on any system.
-
-## How it differs from a typical budget app
-
-Most budget demos show totals. HomeLedger connects totals, budgets and
-time into one daily decision number, works with no account and no
-network, and treats its demo data as a designed feature rather than
-placeholder text: the first screen a judge or a family opens is already
-a real, coherent month.
+**Why it differs.** Most budget demos show totals; HomeLedger shows a
+decision (safe to spend), a plan (envelopes you can rebalance), and what
+is due next (bills), with every number on every page computed from the
+same ledger so the figures always agree.

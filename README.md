@@ -4,81 +4,89 @@
 [![rank](https://make.fun/badge/best-household-budget-site-20261126-1457/CodingRangga22/homeledger-budget/rank.svg)](https://make.fun/bounty/best-household-budget-site-20261126-1457)
 [![reward](https://make.fun/badge/best-household-budget-site-20261126-1457/CodingRangga22/homeledger-budget/reward.svg)](https://make.fun/bounty/best-household-budget-site-20261126-1457)
 
-HomeLedger is a household budget site that runs entirely in the browser:
-no account, no server, no network. Open it, and a realistic demo month is
-already there so every chart and figure can be explored right away.
-
-Entry for the make.fun bounty
+HomeLedger is a household budget site for one household and one month at a
+glance — built for the make.fun bounty
 [Make the best household budget site](https://make.fun/bounty/best-household-budget-site-20261126-1457).
-
-## Screenshots
+It runs entirely from static files in `app/`, works offline in a desktop
+browser and on a phone, and keeps every figure on this device in
+localStorage. No account, no server, no network requests.
 
 ![HomeLedger dashboard](screenshots/1-dashboard.jpg)
-![Budgets and the six-month trend](screenshots/2-budgets-trend.jpg)
-![Adding a transaction](screenshots/3-add-transaction.jpg)
-![HomeLedger on a phone, in dark mode](screenshots/4-phone.jpg)
 
 ## What it does
 
-- **Monthly dashboard** — total income, total expenses, balance and savings
-  rate for the selected month, each with a comparison against last month,
-  and a month navigator with a Today shortcut.
-- **Safe to spend per day** — the figure that sets HomeLedger apart:
-  (this month's balance so far − budget money still set aside) ÷ days left
-  in the month, today included. It uses the current month only, never a
-  cumulative balance, and answers "Over plan" instead of a scary negative
-  when the month is overspent.
-- **Category breakdown** — a hand-built SVG donut plus a ranked list with
-  amounts, shares and proportional bars. Selecting a category filters the
-  transaction list.
-- **Budgets** — a monthly limit per category with a progress bar that turns
-  amber when close and red when over, with a plain-language note.
-- **Six-month trend** — grouped SVG bars of income versus expenses.
-- **Transactions** — add, edit and delete (with Undo), grouped by date,
-  with text search and type/category filters. Friendly validation, never a
-  silent failure.
-- **Data tools** — export and import JSON backups, export CSV, reset all
-  data, and a currency picker (USD by default) using Intl.NumberFormat.
-- **Themes** — light and dark, following the system preference until the
-  visitor picks one; the choice is remembered.
+- **Overview** — total income, total expenses, balance (with the change vs
+  last month), savings rate, and **Safe to spend per day**: this month's
+  balance so far, minus the budget room still reserved in every category
+  limit, divided by the days left in the month including today. A category
+  donut (hand-built SVG) and the last six months as an income-vs-expenses
+  bar chart sit beside the five most recent transactions.
+- **Ledger** — every transaction grouped by date, with text search, type
+  and category filters, add / edit / delete with an Undo toast, friendly
+  validation, and an "Add recurring items" action that copies monthly
+  recurring entries into the selected month without duplicates.
+- **Budgets** — four envelopes (Essentials, Food & Home, Health & Learning,
+  Fun & Future) group the ten expense categories. Move money between
+  category budgets with one form and the envelopes follow. Every category
+  shows a progress bar that turns amber as it fills and red when it passes
+  its limit, and each limit can be edited in place.
+- **Bills** — rent, electricity, internet and a streaming subscription with
+  due dates, amounts and paid / due states you can toggle; the page totals
+  what is still due and what is already paid.
+- **Planner** — two savings goals with progress and one-tap monthly
+  contributions, plus a monthly rollover panel: last month's balance rolls
+  into this month's envelopes, with a look ahead at next month.
+- **Your data** — export and import a JSON backup, export CSV, reset
+  everything with a confirmation, choose USD (default), EUR, GBP, JPY, IDR
+  or AUD with locale formatting, and switch between light and dark themes.
 
-## Demo data
+First run loads a realistic demo household: 42 November transactions plus
+five earlier months, generated relative to today with a seeded random
+generator, so there are never future-dated entries and the savings rate,
+category shares and the two flagged budgets (Groceries about 85% used,
+Dining slightly over) land on target on any day of the month. A banner
+offers to clear the demo data at any time.
 
-On first run HomeLedger seeds six months of demo transactions. The dates
-are generated relative to the day the site is first opened (never in the
-future) and current-month amounts scale with the days already elapsed, so
-the picture is always sensible: no category takes more than 40% of
-spending, the savings rate lands between 15% and 25%, one budget sits near
-85% used and one is slightly over. A banner offers to clear the demo data
-at any time.
+## Run it
 
-## Design and technical choices
+Requires Node.js 22.18 or later. No install, no build step.
 
-- **Offline-first, zero dependencies.** Plain HTML, CSS and vanilla
-  JavaScript modules under `app/`, each file with one clear job:
-  `categories.js` (catalogue and icons), `storage.js` (persistence),
-  `demo-data.js` (seeded demo set), `calculations.js` (pure figures),
-  `charts.js` (SVG charts) and `main.js` (rendering and handlers).
-- **Private by design.** All data lives in one versioned localStorage key
-  (`homeledger:v1`); nothing leaves the device.
-- **Hand-drawn category icons** as inline SVG paths — no emoji, so nothing
-  renders as an empty box anywhere.
-- **Accessible and responsive** — semantic landmarks, labelled controls,
-  visible keyboard focus, AA-minded contrast, a layout that runs from a
-  360px phone (floating add button, bottom-sheet form) to a wide desktop.
-
-## Run it locally
-
-```sh
-node serve.ts          # serves app/ at http://localhost:8080
+```
+node serve.ts            # serves app/ at http://localhost:8080
 ```
 
-Or open `app/index.html` in any modern browser — it works from `file://`
-too. To build the submission output:
+Or open `app/index.html` through any static file server.
 
-```sh
+Build the hand-in output (copies `app/` and `screenshots/`, writes
+`dossier.json`):
+
+```
 mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 ```
+
+## Layout
+
+- `main.ts` — the hand-in program; writes the dossier with the kit library.
+- `serve.ts` — a tiny local preview server for `app/`.
+- `app/index.html` — page structure for the five views.
+- `app/style.css` — design tokens, light/dark themes, responsive layout.
+- `app/data.js` — categories, hand-drawn SVG icons, bills, goals, demo seed.
+- `app/state.js` — the versioned localStorage state and month helpers.
+- `app/charts.js` — the donut and six-month trend charts as inline SVG.
+- `app/views.js` — rendering for each section, envelopes, Safe to spend.
+- `app/main.js` — routing, rendering orchestration and every control.
+- `screenshots/` — real browser renders of the site (desktop, budgets,
+  the add-transaction form, and a phone view).
+- `vendor/makefun-frontend.ts` — the kit's dossier library, unchanged.
+
+## Design choices
+
+Offline-first and zero-dependency: the first load is a handful of small
+files, fonts are a system stack, charts are inline SVG drawn by the site's
+own code, and category icons are simple stroke pictograms (never emoji, so
+nothing renders as an empty box). Numbers use tabular figures and every
+total on every page is computed from the same ledger, so the figures
+always agree.
 
 ## License
 
