@@ -110,6 +110,7 @@ html[data-theme="dark"] .demo-banner { background: #3a2f10; color: #fde68a; }
 .text-link { color: var(--accent-strong); font-weight: 600; }
 .fab { position: fixed; right: 20px; bottom: 20px; width: 56px; height: 56px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 28px; box-shadow: var(--shadow); z-index: 30; }
 html[data-theme="dark"] .fab { color: #06231f; }
+@media (min-width: 769px) { .fab { display: none; } }
 .sheet-backdrop { position: fixed; inset: 0; background: rgba(10, 20, 17, 0.5); display: grid; place-items: end center; z-index: 40; }
 .sheet { background: var(--surface); width: min(560px, 100%); border-radius: 20px 20px 0 0; padding: 22px; }
 @media (min-width: 720px) { .sheet-backdrop { place-items: center; } .sheet { border-radius: 20px; } }
@@ -130,7 +131,10 @@ html[data-theme="dark"] .fab { color: #06231f; }
   .cards .card:last-child { grid-column: 1 / -1; }
   .grid-main { grid-template-columns: 1fr; }
   .envelope-grid { grid-template-columns: repeat(2, 1fr); }
-  .main-nav { order: 3; width: 100%; overflow-x: auto; }
+  .main-nav { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .main-nav::-webkit-scrollbar { display: none; }
+  .main-nav a { padding: 6px 9px; font-size: 14px; white-space: nowrap; }
+  .month-bar h1 { font-size: 21px; white-space: nowrap; }
   .topbar { flex-wrap: wrap; }
   main { padding: 12px 14px 84px; }
   .donut-wrap { flex-direction: column; align-items: center; }
