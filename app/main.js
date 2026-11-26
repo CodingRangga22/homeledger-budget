@@ -1,518 +1,311 @@
-// HomeLedger main module: state, rendering and event handlers. Rendering is
-// split into small functions, one per region of the page, and every render
-// reads from the same state object so the figures always agree with each
-// other. Handlers are wired once at the bottom of this file.
-
-import { categoriesForType, categoryIconSvg, findCategory } from "./categories.js";
+// HomeLedger app entry: wiring, routing, rendering and every control.
+// State lives in state.js, seed data in data.js, charts in charts.js and
+// page fragments in views.js; this file only connects them to the DOM.
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from './data.js';
+import { donutChartSVG, trendChartSVG } from './charts.js';
 import {
-  budgetUsage, expenseBreakdown, monthKeyOf, percentChange, safeToSpendPerDay,
-  shiftMonth, sixMonthTrend, summariseMonth,
-} from "./calculations.js";
-import { buildDonutChartSvg, buildTrendChartSvg } from "./charts.js";
-import { buildDemoData } from "./demo-data.js";
-import { clearStoredState, createEmptyState, loadState, saveState } from "./storage.js";
-
-// ---------------------------------------------------------------- state
+  STORAGE_KEY, clearStoredState, loadState, monthKeyOf, monthLabel, saveState, shiftMonthKey,
+  spentByCategory, sumByType, transactionsInMonth,
+} from './state.js';
+import {
+  billsHTML, budgetsHTML, categoryListHTML, envelopesHTML, goalsHTML, ledgerHTML,
+  summaryCardsHTML, transactionRowHTML,
+} from './views.js';
 
 let state = loadState();
-if (!state) {
-  state = createEmptyState();
-  const demo = buildDemoData(new Date());
-  state.transactions = demo.transactions;
-  state.budgets = demo.budgets;
-  state.demoSeeded = true;
+// Persist the seeded demo on the very first run so a refresh keeps it.
+try {
+  if (!window.localStorage.getItem(STORAGE_KEY)) saveState(state);
+} catch {
   saveState(state);
 }
-
 let selectedMonth = monthKeyOf(new Date());
-let activeCategoryFilter = null;
-let editingTransactionId = null;
-let formType = "expense";
-let lastDeletedTransaction = null;
+let activeView = 'overview';
+let categoryFilter = 'all';
+let lastDeleted = null;
 let toastTimer = null;
 
-const CURRENCY_CODES = ["USD", "EUR", "GBP", "JPY", "IDR", "SGD", "AUD", "CAD", "CHF", "CNY", "INR"];
-const element = (id) => document.getElementById(id);
-
-// ------------------------------------------------------------ formatting
-
-function formatMoney(amount) {
+const $ = (id) => document.getElementById(id);
+const money = (value) => {
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: state.currency }).format(amount);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: state.currency, maximumFractionDigits: state.currency === 'JPY' || state.currency === 'IDR' ? 0 : 2 }).format(value);
   } catch {
-    return `${state.currency} ${amount.toFixed(2)}`;
+    return `$${Number(value || 0).toFixed(2)}`;
   }
-}
-
-function formatSignedPercent(value) {
-  if (value === null || !Number.isFinite(value)) return "No data for last month";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(1)}% vs last month`;
-}
-
-function escapeHtml(text) {
-  return String(text)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function localIsoDate(date) {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function friendlyDate(isoDate) {
-  const [year, month, day] = isoDate.split("-").map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString("en-US", {
-    weekday: "short", month: "short", day: "numeric",
-  });
-}
-
-// ---------------------------------------------------------------- theme
-
-function effectiveTheme() {
-  if (state.theme === "dark" || state.theme === "light") return state.theme;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
+};
 
 function applyTheme() {
-  const theme = effectiveTheme();
-  document.documentElement.dataset.theme = theme;
-  element("themeToggle").innerHTML = theme === "dark"
-    ? `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`
-    : `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8.5 8.5 0 1 1 10.5 4 6.8 6.8 0 0 0 20 13.5z"/></svg>`;
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const dark = state.theme === 'dark' || (state.theme === 'system' && prefersDark);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
 }
 
-// -------------------------------------------------------------- rendering
+function currentMonthRows() { return transactionsInMonth(state.transactions, selectedMonth); }
 
-function renderSummary() {
-  const summary = summariseMonth(state.transactions, selectedMonth);
-  const previous = summariseMonth(state.transactions, shiftMonth(selectedMonth, -1));
-  element("totalIncome").textContent = formatMoney(summary.income);
-  element("totalExpenses").textContent = formatMoney(summary.expenses);
-  const balanceElement = element("balanceValue");
-  balanceElement.textContent = formatMoney(summary.balance);
-  balanceElement.className = `summary-value ${summary.balance < 0 ? "negative" : "positive"}`;
-  element("savingsRate").textContent = `${summary.savingsRate.toFixed(1)}%`;
-  element("incomeDelta").textContent = formatSignedPercent(percentChange(summary.income, previous.income));
-  element("expensesDelta").textContent = formatSignedPercent(percentChange(summary.expenses, previous.expenses));
-  element("balanceDelta").textContent = formatSignedPercent(percentChange(summary.balance, previous.balance));
-  element("savingsDelta").textContent = previous.income > 0
-    ? `${(summary.savingsRate - previous.savingsRate).toFixed(1)} pts vs last month`
-    : "No data for last month";
+function render() {
+  applyTheme();
+  $('currency-select').value = state.currency;
+  $('month-title').textContent = monthLabel(selectedMonth);
+  $('demo-banner').hidden = !state.isDemo;
+  document.querySelectorAll('.main-nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === activeView));
+  document.querySelectorAll('.view').forEach((v) => { v.hidden = v.id !== `view-${activeView}`; });
 
-  const safe = safeToSpendPerDay(state.transactions, state.budgets, selectedMonth, new Date());
-  const safeElement = element("safeToSpend");
-  if (!safe) {
-    safeElement.textContent = "n/a";
-    safeElement.className = "summary-value";
-    element("safeToSpendNote").textContent = "Shown for the current month";
-  } else if (safe.overPlan) {
-    safeElement.textContent = "Over plan";
-    safeElement.className = "summary-value negative";
-    element("safeToSpendNote").textContent = "Spending plus set-aside budgets pass this month's income";
-  } else {
-    safeElement.textContent = `${formatMoney(safe.amount)} / day`;
-    safeElement.className = "summary-value positive";
-    element("safeToSpendNote").textContent = `${safe.daysLeft} days left, ${formatMoney(safe.reserved)} set aside in budgets`;
+  const rows = currentMonthRows();
+  $('summary-cards').innerHTML = summaryCardsHTML(state, selectedMonth, money);
+  const totals = spentByCategory(rows);
+  $('donut-slot').innerHTML = donutChartSVG(totals, money);
+  $('category-list').innerHTML = categoryListHTML(totals, money, 6);
+  const recent = [...rows].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 5);
+  $('recent-list').innerHTML = recent.length ? recent.map((t) => transactionRowHTML(t, money, false)).join('') : '<p class="empty-note">No transactions this month yet.</p>';
+
+  const trendMonths = [];
+  for (let back = 5; back >= 0; back--) {
+    const key = shiftMonthKey(selectedMonth, -back);
+    const mrows = transactionsInMonth(state.transactions, key);
+    const label = new Date(`${key}-02T12:00:00`).toLocaleString('en-US', { month: 'short' });
+    trendMonths.push({ label, income: sumByType(mrows, 'income'), expense: sumByType(mrows, 'expense') });
   }
+  $('trend-slot').innerHTML = trendChartSVG(trendMonths, money);
+
+  const dueBills = state.bills.filter((b) => !b.paid);
+  $('due-list').innerHTML = dueBills.length
+    ? dueBills.map((b) => `<p><strong>${b.name}</strong> — ${money(b.amount)}<br><span class="muted">${b.detail}</span></p>`).join('')
+    : '<p class="empty-note">Nothing due. Every bill is paid.</p>';
+  $('goal-preview').innerHTML = goalsHTML(state, money, false);
+
+  renderLedger();
+  $('budget-list').innerHTML = budgetsHTML(state, selectedMonth, money);
+  $('envelope-grid').innerHTML = envelopesHTML(state, selectedMonth, money);
+  fillCategorySelects();
+  $('bill-list').innerHTML = billsHTML(state, money);
+  const dueTotal = dueBills.reduce((s, b) => s + b.amount, 0);
+  const paidTotal = state.bills.filter((b) => b.paid).reduce((s, b) => s + b.amount, 0);
+  $('bill-summary').textContent = `Due this month: ${money(dueTotal)} · Already paid: ${money(paidTotal)}`;
+  $('goal-list').innerHTML = goalsHTML(state, money, true);
+  renderRollover();
 }
 
-function renderMonthBar() {
-  const [year, month] = selectedMonth.split("-").map(Number);
-  const date = new Date(year, month - 1, 1);
-  element("monthTitle").textContent = date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  const count = state.transactions.filter((t) => t.date.startsWith(selectedMonth)).length;
-  element("monthSubtitle").textContent = `${count} transaction${count === 1 ? "" : "s"} this month`;
-  element("nextMonth").disabled = selectedMonth >= monthKeyOf(new Date());
+function renderRollover() {
+  const prevKey = shiftMonthKey(selectedMonth, -1);
+  const prevRows = transactionsInMonth(state.transactions, prevKey);
+  const surplus = sumByType(prevRows, 'income') - sumByType(prevRows, 'expense');
+  const nextKey = shiftMonthKey(selectedMonth, 1);
+  const plannedIncome = 3200;
+  $('rollover-box').innerHTML = `<p><strong>${monthLabel(prevKey)}</strong> closed with a balance of <strong class="${surplus < 0 ? 'negative' : 'positive'}">${money(surplus)}</strong>.</p>
+    <p class="muted">${surplus >= 0
+      ? `That surplus rolls into ${monthLabel(selectedMonth)} in the Fun &amp; Future envelope, on top of this month's budgets.`
+      : `That shortfall rolls into ${monthLabel(selectedMonth)}: trim an envelope before new spending.`}</p>
+    <p>Looking ahead to <strong>${monthLabel(nextKey)}</strong>: expected income about ${money(plannedIncome)}, planned savings ${money(state.goals.reduce((s, g) => s + g.monthly, 0))} across ${state.goals.length} goals, and rent of ${money(state.budgets.Housing ? 768 : 0)} due on the 1st.</p>`;
 }
 
-function renderBreakdown() {
-  const breakdown = expenseBreakdown(state.transactions, selectedMonth).map((entry) => {
-    const category = findCategory(entry.category);
-    return { ...entry, color: category.color, label: category.label, formattedAmount: formatMoney(entry.amount) };
-  });
-  element("donutChart").innerHTML = buildDonutChartSvg(breakdown, formatMoney(breakdown.reduce((sum, e) => sum + e.amount, 0)));
-  const list = element("categoryList");
-  if (!breakdown.length) {
-    list.innerHTML = `<li class="empty-note">No expenses recorded this month yet.</li>`;
-    return;
-  }
-  list.innerHTML = breakdown
-    .map((entry) => {
-      const category = findCategory(entry.category);
-      const selected = activeCategoryFilter === entry.category ? " selected" : "";
-      return `<li><button type="button" class="category-row${selected}" data-category="${entry.category}" aria-pressed="${activeCategoryFilter === entry.category}">
-        <span class="category-icon">${categoryIconSvg(category)}</span>
-        <span><span class="category-name">${category.label}</span>
-          <span class="category-bar"><span class="category-bar-fill" style="display:block;width:${Math.round(entry.share * 100)}%;background:${category.color}"></span></span></span>
-        <span class="category-amount"><strong>${formatMoney(entry.amount)}</strong><span>${(entry.share * 100).toFixed(1)}%</span></span>
-      </button></li>`;
-    })
-    .join("");
-  list.querySelectorAll("[data-category]").forEach((button) => {
-    button.addEventListener("click", () => {
-      activeCategoryFilter = activeCategoryFilter === button.dataset.category ? null : button.dataset.category;
-      renderAll();
-    });
+function filteredLedgerRows() {
+  const query = ($('search-input').value || '').toLowerCase();
+  const type = $('filter-type').value;
+  return currentMonthRows().filter((t) => {
+    if (type !== 'all' && t.type !== type) return false;
+    if (categoryFilter !== 'all' && t.category !== categoryFilter) return false;
+    if (query && !`${t.note} ${t.category}`.toLowerCase().includes(query)) return false;
+    return true;
   });
 }
+function renderLedger() {
+  $('filter-category').value = categoryFilter;
+  $('ledger-list').innerHTML = ledgerHTML(filteredLedgerRows(), money);
+}
 
-function renderBudgets() {
-  const usage = budgetUsage(state.transactions, state.budgets, selectedMonth);
-  const container = element("budgetList");
-  if (!usage.length) {
-    container.innerHTML = `<p class="empty-note">No budgets set yet. Add a monthly limit below and HomeLedger will track it here.</p>`;
-    return;
+function fillCategorySelects() {
+  const all = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES];
+  const unique = [...new Set(all)];
+  const filter = $('filter-category');
+  if (filter.options.length !== unique.length + 1) {
+    filter.innerHTML = '<option value="all">All categories</option>' + unique.map((c) => `<option value="${c}">${c}</option>`).join('');
   }
-  container.innerHTML = usage
-    .map((entry) => {
-      const category = findCategory(entry.category);
-      const percent = Math.round(entry.ratio * 100);
-      const level = entry.ratio > 1 ? "over" : entry.ratio >= 0.8 ? "warn" : "";
-      const note = entry.ratio > 1
-        ? `<p class="budget-note over">${formatMoney(entry.spent - entry.limit)} over the limit. Consider moving money from another category.</p>`
-        : entry.ratio >= 0.8
-          ? `<p class="budget-note warn">Getting close: ${formatMoney(entry.limit - entry.spent)} left for this month.</p>`
-          : `<p class="budget-note muted">${formatMoney(entry.limit - entry.spent)} left for this month.</p>`;
-      return `<div class="budget-row">
-        <div class="budget-row-head">
-          <span class="budget-name">${categoryIconSvg(category, 16)} ${category.label}</span>
-          <span class="budget-figures">${formatMoney(entry.spent)} of ${formatMoney(entry.limit)} (${percent}%)
-            <button type="button" class="budget-remove" data-remove-budget="${entry.category}" aria-label="Remove ${category.label} budget">Remove</button></span>
-        </div>
-        <div class="budget-track"><div class="budget-fill ${level}" style="width:${Math.min(100, percent)}%"></div></div>
-        ${note}
-      </div>`;
-    })
-    .join("");
-  container.querySelectorAll("[data-remove-budget]").forEach((button) => {
-    button.addEventListener("click", () => {
-      delete state.budgets[button.dataset.removeBudget];
-      saveState(state);
-      renderAll();
-      showToast("Budget removed");
-    });
-  });
+  const moveOptions = EXPENSE_CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join('');
+  if ($('move-from').options.length !== EXPENSE_CATEGORIES.length) { $('move-from').innerHTML = moveOptions; $('move-to').innerHTML = moveOptions; $('move-to').value = 'Savings'; }
+  fillFormCategories();
+}
+function fillFormCategories() {
+  const type = $('field-type').value;
+  const list = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+  const current = $('field-category').value;
+  $('field-category').innerHTML = list.map((c) => `<option value="${c}">${c}</option>`).join('');
+  if (list.includes(current)) $('field-category').value = current;
 }
 
-function renderTrend() {
-  const trend = sixMonthTrend(state.transactions, selectedMonth);
-  element("trendChart").innerHTML = buildTrendChartSvg(trend, formatMoney);
-}
-
-function filteredTransactions() {
-  const search = element("searchInput").value.trim().toLowerCase();
-  const type = element("typeFilter").value;
-  return state.transactions
-    .filter((t) => t.date.startsWith(selectedMonth))
-    .filter((t) => type === "all" || t.type === type)
-    .filter((t) => !activeCategoryFilter || t.category === activeCategoryFilter)
-    .filter((t) => {
-      if (!search) return true;
-      const category = findCategory(t.category).label.toLowerCase();
-      return t.note.toLowerCase().includes(search) || category.includes(search);
-    })
-    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-}
-
-function renderTransactions() {
-  const rows = filteredTransactions();
-  element("transactionCount").textContent = `${rows.length} shown`;
-  const filterNote = element("activeFilterNote");
-  const clearButton = element("clearFilterButton");
-  if (activeCategoryFilter) {
-    filterNote.hidden = false;
-    filterNote.textContent = `Filtered by category: ${findCategory(activeCategoryFilter).label}`;
-    clearButton.hidden = false;
-  } else {
-    filterNote.hidden = true;
-    clearButton.hidden = true;
-  }
-  const container = element("transactionList");
-  if (!rows.length) {
-    container.innerHTML = `<div class="empty-state"><strong>Nothing here yet</strong>
-      No transactions match this view. Add one with the button above, or clear the filters.</div>`;
-    return;
-  }
-  let currentDate = "";
-  container.innerHTML = rows
-    .map((transaction) => {
-      const category = findCategory(transaction.category);
-      const groupTitle = transaction.date !== currentDate
-        ? `<h3 class="date-group-title">${friendlyDate(transaction.date)}</h3>`
-        : "";
-      currentDate = transaction.date;
-      const sign = transaction.type === "income" ? "+" : "-";
-      return `${groupTitle}<div class="transaction-row">
-        <span class="transaction-icon">${categoryIconSvg(category, 19)}</span>
-        <span><span class="transaction-note">${escapeHtml(transaction.note || category.label)}</span>
-          <span class="transaction-category">${category.label}</span></span>
-        <span class="transaction-amount ${transaction.type}">${sign}${formatMoney(transaction.amount)}</span>
-        <span class="row-actions">
-          <button type="button" class="row-action" data-edit="${transaction.id}">Edit</button>
-          <button type="button" class="row-action delete" data-delete="${transaction.id}">Delete</button>
-        </span>
-      </div>`;
-    })
-    .join("");
-  container.querySelectorAll("[data-edit]").forEach((button) => {
-    button.addEventListener("click", () => openForm(state.transactions.find((t) => t.id === button.dataset.edit)));
-  });
-  container.querySelectorAll("[data-delete]").forEach((button) => {
-    button.addEventListener("click", () => deleteTransaction(button.dataset.delete));
-  });
-}
-
-function renderDemoBanner() {
-  element("demoBanner").hidden = !(state.demoSeeded && !state.demoBannerDismissed);
-}
-
-function renderAll() {
-  renderMonthBar();
-  renderSummary();
-  renderBreakdown();
-  renderBudgets();
-  renderTrend();
-  renderTransactions();
-  renderDemoBanner();
-}
-
-// ---------------------------------------------------------------- toast
-
-function showToast(message, withUndo = false) {
-  const toast = element("toast");
-  element("toastText").textContent = message;
-  element("toastUndoButton").hidden = !withUndo;
-  toast.hidden = false;
+function showToast(message, withUndo) {
+  $('toast-text').textContent = message;
+  $('toast-undo').hidden = !withUndo;
+  $('toast').hidden = false;
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => { toast.hidden = true; }, 6000);
+  toastTimer = window.setTimeout(() => { $('toast').hidden = true; }, 6000);
 }
 
-// ------------------------------------------------------------ form logic
-
-function fillCategoryOptions(selectElement, type, selectedId) {
-  selectElement.innerHTML = categoriesForType(type)
-    .map((category) => `<option value="${category.id}">${category.label}</option>`)
-    .join("");
-  if (selectedId) selectElement.value = selectedId;
+function openForm(transaction) {
+  $('sheet-backdrop').hidden = false;
+  $('form-title').textContent = transaction ? 'Edit transaction' : 'Add transaction';
+  $('field-id').value = transaction ? transaction.id : '';
+  $('field-type').value = transaction ? transaction.type : 'expense';
+  fillFormCategories();
+  $('field-category').value = transaction ? transaction.category : EXPENSE_CATEGORIES[0];
+  $('field-amount').value = transaction ? transaction.amount : '';
+  $('field-date').value = transaction ? transaction.date : `${selectedMonth}-${String(Math.min(new Date().getDate(), 28)).padStart(2, '0')}`;
+  if (selectedMonth !== monthKeyOf(new Date())) $('field-date').value = transaction ? transaction.date : `${selectedMonth}-01`;
+  $('field-note').value = transaction ? transaction.note || '' : '';
+  $('field-recurring').checked = transaction ? Boolean(transaction.recurring) : false;
+  $('form-error').textContent = '';
+  $('field-amount').focus();
 }
+function closeForm() { $('sheet-backdrop').hidden = true; }
 
-function setFormType(type) {
-  formType = type;
-  element("typeExpenseButton").classList.toggle("active", type === "expense");
-  element("typeIncomeButton").classList.toggle("active", type === "income");
-  fillCategoryOptions(element("categoryInput"), type, element("categoryInput").value);
-}
-
-function openForm(transaction = null) {
-  editingTransactionId = transaction ? transaction.id : null;
-  element("formTitle").textContent = transaction ? "Edit transaction" : "Add transaction";
-  element("saveTransactionButton").textContent = transaction ? "Save changes" : "Save transaction";
-  element("formError").hidden = true;
-  setFormType(transaction ? transaction.type : "expense");
-  element("amountInput").value = transaction ? transaction.amount : "";
-  fillCategoryOptions(element("categoryInput"), formType, transaction ? transaction.category : undefined);
-  element("dateInput").value = transaction ? transaction.date : localIsoDate(new Date());
-  element("dateInput").max = localIsoDate(new Date());
-  element("noteInput").value = transaction ? transaction.note : "";
-  element("formOverlay").hidden = false;
-  element("amountInput").focus();
-}
-
-function closeForm() {
-  element("formOverlay").hidden = true;
-  editingTransactionId = null;
-}
-
-function showFormError(message) {
-  const errorElement = element("formError");
-  errorElement.textContent = message;
-  errorElement.hidden = false;
-}
-
-function handleFormSubmit(event) {
+function onFormSubmit(event) {
   event.preventDefault();
-  const amount = Number(element("amountInput").value);
-  const category = element("categoryInput").value;
-  const date = element("dateInput").value;
-  const note = element("noteInput").value.trim().slice(0, 120);
-  if (!Number.isFinite(amount) || amount <= 0) return showFormError("Please enter an amount greater than zero.");
-  if (amount > 999999999999) return showFormError("That amount looks too large. Please check it and try again.");
-  if (!category) return showFormError("Please choose a category.");
-  if (!date) return showFormError("Please pick a date.");
-  if (date > localIsoDate(new Date())) return showFormError("The date cannot be in the future.");
-  const record = { type: formType, category, amount: Math.round(amount * 100) / 100, date, note };
-  if (editingTransactionId) {
-    const existing = state.transactions.find((t) => t.id === editingTransactionId);
-    if (existing) Object.assign(existing, record);
-    showToast("Transaction updated");
+  const amount = Number($('field-amount').value);
+  const date = $('field-date').value;
+  const note = $('field-note').value.trim().slice(0, 80);
+  if (!Number.isFinite(amount) || amount <= 0) { $('form-error').textContent = 'Please enter an amount above zero.'; return; }
+  if (amount > 100000000) { $('form-error').textContent = 'That amount looks too large — please check it.'; return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { $('form-error').textContent = 'Please pick a valid date.'; return; }
+  const id = $('field-id').value;
+  const record = { id: id || `tx-${Date.now()}-${Math.floor(Math.random() * 9999)}`, type: $('field-type').value, amount: Math.round(amount * 100) / 100, category: $('field-category').value, date, note, recurring: $('field-recurring').checked };
+  if (id) {
+    state.transactions = state.transactions.map((t) => (t.id === id ? record : t));
+    showToast('Transaction updated.', false);
   } else {
-    state.transactions.push({ id: `tx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...record });
-    showToast("Transaction added");
+    state.transactions.push(record);
+    showToast('Transaction added.', false);
   }
   selectedMonth = date.slice(0, 7);
-  saveState(state);
-  closeForm();
-  renderAll();
+  saveState(state); closeForm(); render();
 }
 
-function deleteTransaction(id) {
-  const index = state.transactions.findIndex((t) => t.id === id);
-  if (index === -1) return;
-  lastDeletedTransaction = state.transactions[index];
-  state.transactions.splice(index, 1);
-  saveState(state);
-  renderAll();
-  showToast("Transaction deleted", true);
+function downloadFile(name, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement('a');
+  link.href = url; link.download = name; link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 800);
 }
 
-function undoDelete() {
-  if (!lastDeletedTransaction) return;
-  state.transactions.push(lastDeletedTransaction);
-  lastDeletedTransaction = null;
-  saveState(state);
-  element("toast").hidden = true;
-  renderAll();
-  showToast("Transaction restored");
+function route() {
+  const name = (window.location.hash || '#/overview').replace('#/', '').split('/')[0];
+  activeView = ['overview', 'ledger', 'budgets', 'bills', 'planner'].includes(name) ? name : 'overview';
+  render();
 }
 
-// ------------------------------------------------------------ data tools
-
-function downloadFile(filename, content, type) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 500);
-}
-
-function exportJson() {
-  downloadFile("homeledger-backup.json", JSON.stringify({ transactions: state.transactions, budgets: state.budgets, currency: state.currency }, null, 2), "application/json");
-  showToast("JSON backup downloaded");
-}
-
-function exportCsv() {
-  const header = "date,type,category,amount,note";
-  const lines = [...state.transactions]
-    .sort((a, b) => (a.date < b.date ? -1 : 1))
-    .map((t) => {
-      const note = `"${String(t.note || "").replaceAll('"', '""')}"`;
-      return `${t.date},${t.type},${findCategory(t.category).label},${t.amount},${note}`;
-    });
-  downloadFile("homeledger-transactions.csv", [header, ...lines].join("\n"), "text/csv");
-  showToast("CSV downloaded");
-}
-
-function importJsonFile(file) {
-  const reader = new FileReader();
-  reader.addEventListener("load", () => {
-    try {
-      const parsed = JSON.parse(String(reader.result));
-      if (!parsed || !Array.isArray(parsed.transactions)) throw new Error("shape");
-      const clean = parsed.transactions.filter((t) =>
-        t && (t.type === "income" || t.type === "expense") &&
-        Number.isFinite(Number(t.amount)) && typeof t.date === "string" && typeof t.category === "string");
-      if (!clean.length) throw new Error("empty");
-      state.transactions = clean.map((t) => ({
-        id: String(t.id || `tx-${Math.random().toString(36).slice(2, 10)}`),
-        type: t.type, category: t.category, amount: Number(t.amount),
-        date: t.date.slice(0, 10), note: String(t.note || "").slice(0, 120),
-      }));
-      if (parsed.budgets && typeof parsed.budgets === "object") state.budgets = parsed.budgets;
-      saveState(state);
-      renderAll();
-      showToast(`Imported ${clean.length} transactions`);
-    } catch {
-      showToast("That file could not be imported. Please use a HomeLedger JSON backup.");
+function bindEvents() {
+  window.addEventListener('hashchange', route);
+  $('month-prev').addEventListener('click', () => { selectedMonth = shiftMonthKey(selectedMonth, -1); render(); });
+  $('month-next').addEventListener('click', () => { selectedMonth = shiftMonthKey(selectedMonth, 1); render(); });
+  $('month-today').addEventListener('click', () => { selectedMonth = monthKeyOf(new Date()); render(); });
+  $('theme-toggle').addEventListener('click', () => {
+    const darkNow = document.documentElement.dataset.theme === 'dark';
+    state.theme = darkNow ? 'light' : 'dark'; saveState(state); render();
+  });
+  $('currency-select').addEventListener('change', (e) => { state.currency = e.target.value; saveState(state); render(); });
+  $('dismiss-demo').addEventListener('click', () => { $('demo-banner').hidden = true; });
+  $('clear-demo').addEventListener('click', () => {
+    state = { transactions: [], budgets: {}, bills: [], goals: [], currency: state.currency, theme: state.theme, isDemo: false, recurringApplied: {} };
+    saveState(state); render(); showToast('Demo data cleared. Your ledger is empty and ready.', false);
+  });
+  $('open-add').addEventListener('click', () => openForm(null));
+  $('fab-add').addEventListener('click', () => openForm(null));
+  $('form-cancel').addEventListener('click', closeForm);
+  $('sheet-backdrop').addEventListener('click', (e) => { if (e.target === $('sheet-backdrop')) closeForm(); });
+  $('tx-form').addEventListener('submit', onFormSubmit);
+  $('field-type').addEventListener('change', fillFormCategories);
+  $('search-input').addEventListener('input', renderLedger);
+  $('filter-type').addEventListener('change', renderLedger);
+  $('filter-category').addEventListener('change', (e) => { categoryFilter = e.target.value; renderLedger(); });
+  $('category-list').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-filter-category]');
+    if (!row) return;
+    categoryFilter = row.dataset.filterCategory;
+    window.location.hash = '#/ledger';
+    render();
+  });
+  $('ledger-list').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-edit]');
+    const deleteBtn = e.target.closest('[data-delete]');
+    if (editBtn) openForm(state.transactions.find((t) => t.id === editBtn.dataset.edit));
+    if (deleteBtn) {
+      lastDeleted = state.transactions.find((t) => t.id === deleteBtn.dataset.delete) || null;
+      state.transactions = state.transactions.filter((t) => t.id !== deleteBtn.dataset.delete);
+      saveState(state); render(); showToast('Transaction deleted.', true);
     }
   });
-  reader.readAsText(file);
+  $('toast-undo').addEventListener('click', () => {
+    if (lastDeleted) { state.transactions.push(lastDeleted); lastDeleted = null; saveState(state); render(); }
+    $('toast').hidden = true;
+  });
+  $('budget-list').addEventListener('change', (e) => {
+    const input = e.target.closest('[data-budget-input]');
+    if (!input) return;
+    const value = Math.max(0, Number(input.value) || 0);
+    state.budgets[input.dataset.budgetInput] = value;
+    saveState(state); render(); showToast('Budget updated.', false);
+  });
+  $('move-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const from = $('move-from').value; const to = $('move-to').value; const amount = Number($('move-amount').value);
+    if (from === to) { $('move-message').textContent = 'Pick two different categories.'; return; }
+    if (!Number.isFinite(amount) || amount <= 0 || amount > (state.budgets[from] || 0)) { $('move-message').textContent = 'Enter an amount within the source budget.'; return; }
+    state.budgets[from] -= amount; state.budgets[to] = (state.budgets[to] || 0) + amount;
+    saveState(state); render(); $('move-message').textContent = `Moved ${money(amount)} from ${from} to ${to}.`;
+  });
+  $('bill-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-toggle-bill]');
+    if (!btn) return;
+    state.bills = state.bills.map((b) => (b.id === btn.dataset.toggleBill ? { ...b, paid: !b.paid } : b));
+    saveState(state); render();
+  });
+  $('goal-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-add-goal]');
+    if (!btn) return;
+    state.goals = state.goals.map((g) => (g.id === btn.dataset.addGoal ? { ...g, saved: Math.min(g.target, g.saved + g.monthly) } : g));
+    saveState(state); render(); showToast('Monthly contribution added to the goal.', false);
+  });
+  $('add-recurring').addEventListener('click', () => {
+    const sources = state.transactions.filter((t) => t.recurring && t.date.slice(0, 7) < selectedMonth);
+    const latestByKey = {};
+    for (const t of sources) latestByKey[`${t.category}|${t.note}`] = t;
+    let added = 0;
+    for (const src of Object.values(latestByKey)) {
+      const exists = state.transactions.some((t) => t.recurringFrom === src.id && t.date.startsWith(selectedMonth));
+      if (exists) continue;
+      const day = Math.min(Number(src.date.slice(8, 10)), 28);
+      state.transactions.push({ ...src, id: `tx-rec-${Date.now()}-${added}`, date: `${selectedMonth}-${String(day).padStart(2, '0')}`, recurringFrom: src.id });
+      added++;
+    }
+    saveState(state); render();
+    showToast(added ? `${added} recurring item(s) added to ${monthLabel(selectedMonth)}.` : 'No new recurring items for this month.', false);
+  });
+  $('export-json').addEventListener('click', () => downloadFile('homeledger-backup.json', JSON.stringify(state, null, 2), 'application/json'));
+  $('export-csv').addEventListener('click', () => {
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = ['date,type,category,amount,note,recurring', ...state.transactions.map((t) => [t.date, t.type, esc(t.category), t.amount, esc(t.note), t.recurring ? 'yes' : 'no'].join(','))].join('\n');
+    downloadFile('homeledger-transactions.csv', csv, 'text/csv');
+  });
+  $('import-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    file.text().then((text) => {
+      try {
+        const parsed = JSON.parse(text);
+        if (!parsed || !Array.isArray(parsed.transactions)) throw new Error('bad file');
+        state = { ...state, ...parsed };
+        saveState(state); render();
+        $('tools-message').textContent = 'Import complete — your backup is loaded.';
+      } catch {
+        $('tools-message').textContent = 'That file could not be imported. Please use a HomeLedger JSON backup.';
+      }
+    });
+  });
+  $('reset-all').addEventListener('click', () => {
+    if (!window.confirm('Delete every transaction, budget, bill and goal on this device?')) return;
+    clearStoredState();
+    state = { transactions: [], budgets: {}, bills: [], goals: [], currency: 'USD', theme: 'system', isDemo: false, recurringApplied: {} };
+    saveState(state); render(); showToast('All data reset.', false);
+  });
 }
 
-function resetAllData() {
-  if (!window.confirm("Delete all HomeLedger data in this browser and start empty? This cannot be undone.")) return;
-  clearStoredState();
-  state = createEmptyState();
-  saveState(state);
-  selectedMonth = monthKeyOf(new Date());
-  activeCategoryFilter = null;
-  renderAll();
-  showToast("All data cleared");
-}
-
-function clearDemoData() {
-  state.transactions = state.transactions.filter((t) => !t.demo);
-  state.demoSeeded = false;
-  if (!state.transactions.length) state.budgets = {};
-  saveState(state);
-  renderAll();
-  showToast("Demo data cleared");
-}
-
-// ---------------------------------------------------------------- wiring
-
-function initialise() {
-  const currencySelect = element("currencySelect");
-  currencySelect.innerHTML = CURRENCY_CODES.map((code) => `<option value="${code}">${code}</option>`).join("");
-  currencySelect.value = state.currency;
-  fillCategoryOptions(element("budgetCategory"), "expense");
-
-  element("previousMonth").addEventListener("click", () => { selectedMonth = shiftMonth(selectedMonth, -1); renderAll(); });
-  element("nextMonth").addEventListener("click", () => { selectedMonth = shiftMonth(selectedMonth, 1); renderAll(); });
-  element("todayButton").addEventListener("click", () => { selectedMonth = monthKeyOf(new Date()); renderAll(); });
-  element("addTransactionTop").addEventListener("click", () => openForm());
-  element("addTransactionFab").addEventListener("click", () => openForm());
-  element("closeFormButton").addEventListener("click", closeForm);
-  element("cancelFormButton").addEventListener("click", closeForm);
-  element("formOverlay").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeForm(); });
-  element("typeExpenseButton").addEventListener("click", () => setFormType("expense"));
-  element("typeIncomeButton").addEventListener("click", () => setFormType("income"));
-  element("transactionForm").addEventListener("submit", handleFormSubmit);
-  element("searchInput").addEventListener("input", renderTransactions);
-  element("typeFilter").addEventListener("change", renderTransactions);
-  element("clearFilterButton").addEventListener("click", () => { activeCategoryFilter = null; renderAll(); });
-  element("toastUndoButton").addEventListener("click", undoDelete);
-  element("themeToggle").addEventListener("click", () => {
-    state.theme = effectiveTheme() === "dark" ? "light" : "dark";
-    saveState(state);
-    applyTheme();
-  });
-  currencySelect.addEventListener("change", () => { state.currency = currencySelect.value; saveState(state); renderAll(); });
-  element("budgetForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const limit = Number(element("budgetLimit").value);
-    if (!Number.isFinite(limit) || limit < 0) return showToast("Please enter a budget limit of zero or more.");
-    state.budgets[element("budgetCategory").value] = Math.round(limit * 100) / 100;
-    element("budgetLimit").value = "";
-    saveState(state);
-    renderAll();
-    showToast("Budget saved");
-  });
-  element("exportJsonButton").addEventListener("click", exportJson);
-  element("exportCsvButton").addEventListener("click", exportCsv);
-  element("importFileInput").addEventListener("change", (event) => {
-    if (event.target.files[0]) importJsonFile(event.target.files[0]);
-    event.target.value = "";
-  });
-  element("resetButton").addEventListener("click", resetAllData);
-  element("clearDemoButton").addEventListener("click", clearDemoData);
-  element("dismissDemoButton").addEventListener("click", () => {
-    state.demoBannerDismissed = true;
-    saveState(state);
-    renderDemoBanner();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !element("formOverlay").hidden) closeForm();
-  });
-
-  applyTheme();
-  renderAll();
-}
-
-initialise();
+bindEvents();
+route();
